@@ -5,29 +5,62 @@ import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.net.Uri;
+import android.os.AsyncTask;
 import android.os.Environment;
 import android.provider.MediaStore;
+import android.provider.Telephony;
 import android.support.v7.app.AppCompatActivity;
 import android.os.Bundle;
 import android.util.Log;
+import android.view.KeyEvent;
 import android.view.View;
 import android.widget.Button;
 import android.widget.ImageView;
 import android.widget.Toast;
 
+import com.afollestad.materialdialogs.MaterialDialog;
+import com.cloudinary.Cloudinary;
+import com.cloudinary.utils.ObjectUtils;
+import com.example.lizcoria.myapplication.ApiConnections.ApiFolioRequests;
+import com.example.lizcoria.myapplication.Models.ContestantModel;
 import com.example.lizcoria.myapplication.R;
+import com.example.lizcoria.myapplication.utils.CommonSettings;
+import com.squareup.picasso.Picasso;
+
+import org.json.JSONException;
+import org.json.JSONObject;
 
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.IOException;
+import java.util.HashMap;
+import java.util.Map;
+
+import retrofit.Callback;
+import retrofit.RestAdapter;
+import retrofit.RetrofitError;
+import retrofit.client.Response;
+import retrofit.mime.TypedFile;
 
 public class ParticipanteActivity extends AppCompatActivity {
 
     protected  static final int CAPTURE_IMAGE_ACTIVITY_REQUEST_CODE =0;
 
     private static int RESULT_LOAD_IMAGE = 1;
-    Button btn_take,btnSelect;
+    Button btn_take,btnSelect,btnsubir;
     Uri imageUri;
 
+    String image_path= "";
     ImageView imageView;
+
+    Cloudinary cloudinary;
+    HashMap config;
+    FileInputStream fileInputStream;
+    File file;
+    MaterialDialog.Builder builder;
+    MaterialDialog dialog;
+    Map Result;
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -48,7 +81,7 @@ public class ParticipanteActivity extends AppCompatActivity {
             }
         });
         btnSelect = (Button)findViewById(R.id.btn_seleccion);
-
+        imageView = (ImageView) findViewById(R.id.iViewParticipante);
         btnSelect.setOnClickListener(new View.OnClickListener() {
 
             @Override
@@ -61,6 +94,28 @@ public class ParticipanteActivity extends AppCompatActivity {
                 startActivityForResult(i, RESULT_LOAD_IMAGE);
             }
         });
+        builder = new MaterialDialog.Builder(this)
+                .title("Espere")
+                .progress(true, 0)
+                .progressIndeterminateStyle(true);
+
+
+        dialog = builder.build();
+
+        config= new HashMap();
+        config.put("cloud_name", "dttuj6iv1");
+        config.put("api_key", "626489617795249");//I have changed the key and secret
+        config.put("api_secret", "zdAbLdG6Ppy14iKkrG42W25syjA");
+
+        cloudinary = new Cloudinary(config);
+        btnsubir = (Button)findViewById(R.id.btn_upload);
+        btnsubir.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                subir();
+            }
+        });
+
     }
 
     @Override
@@ -70,10 +125,8 @@ public class ParticipanteActivity extends AppCompatActivity {
                 //Bundle extras = data.getExtras();
 
                 Log.e("URI",imageUri.toString());
-
-                //Bitmap bmp = (Bitmap)extras.get("data");
-                Toast.makeText(ParticipanteActivity.this, ""+imageUri.toString(), Toast.LENGTH_SHORT).show();
-               // imageView.setImageBitmap(bmp);
+                image_path = imageUri.toString();
+                Picasso.with(getApplicationContext()).load(imageUri).into(imageView);
 
             }
             else if (resultCode==RESULT_CANCELED) {
@@ -94,9 +147,112 @@ public class ParticipanteActivity extends AppCompatActivity {
             String picturePath = cursor.getString(columnIndex);
             cursor.close();
 
-            ImageView imageView = (ImageView) findViewById(R.id.iViewParticipante);
+            image_path = picturePath;
             imageView.setImageBitmap(BitmapFactory.decodeFile(picturePath));
 
         }
     }
+
+    public void subir(){
+        TypedFile typedFile = new TypedFile("multipart/form-data", new File(image_path));
+        file = new File(image_path);
+        try {
+            fileInputStream = new FileInputStream(file);
+            new Upload(cloudinary).execute();
+            dialog.show();
+        } catch (FileNotFoundException e) {
+            e.printStackTrace();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+
+    }
+
+    private class Upload extends AsyncTask<String, Void, String> {
+        private Cloudinary mCloudinary;
+
+        public Upload( Cloudinary cloudinary ) {
+            super();
+            mCloudinary = cloudinary;
+        }
+        @Override
+        protected String doInBackground(String... params) {
+            String response ="";
+            try
+            {
+                Log.d("UPLOAD", "doInBackground: --------------------->");
+                Result =  mCloudinary.uploader().upload(fileInputStream, ObjectUtils.emptyMap());
+            }
+            catch(Exception ex)
+            {
+                ex.printStackTrace();
+            }
+            return response;
+        }
+
+        @Override
+        protected void onPostExecute(String result) {
+
+            getResult();
+            super.onPostExecute(result);
+        }
+    }
+
+    public void getResult(){
+
+        Log.d("UPLOAD", "getResult: "+Result);
+        String url_upload = (String) Result.get("url");
+
+        serverpost(url_upload);
+
+    }
+
+    public void serverpost(String url_upload){
+
+        ContestantModel contestantModel = new ContestantModel(0,url_upload, CommonSettings.workshop_id,0);
+
+        RestAdapter adapter = new RestAdapter.Builder()
+                .setEndpoint(CommonSettings.BaseUrl)
+                .setLogLevel(RestAdapter.LogLevel.FULL)
+                .build();
+        ApiFolioRequests api = adapter.create(ApiFolioRequests.class);
+
+        api.createPost(contestantModel, new Callback<ContestantModel>() {
+            @Override
+            public void success(ContestantModel contestantModel, Response response) {
+                dialog.dismiss();
+                new MaterialDialog.Builder(ParticipanteActivity.this)
+                        .title("Gracias por participar en el taller")
+
+                        .positiveText("Cerrar")
+                        .show();
+                clean();
+            }
+
+            @Override
+            public void failure(RetrofitError error) {
+                dialog.dismiss();
+                new MaterialDialog.Builder(ParticipanteActivity.this)
+                        .title("Ah Ocurrido un error")
+                        .content(error.getMessage())
+                        .positiveText("Aceptar")
+                        .show();
+            }
+        });
+    }
+
+    public void clean(){
+
+    }
+
+    @Override
+    public boolean onKeyDown(int keyCode, KeyEvent event) {
+        if (keyCode == KeyEvent.KEYCODE_BACK) {
+            moveTaskToBack(true);
+            return true;
+        }
+        return super.onKeyDown(keyCode, event);
+    }
+
+
 }
